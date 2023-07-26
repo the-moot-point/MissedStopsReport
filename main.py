@@ -36,7 +36,12 @@ def load_and_prune_data(filenames, df_phases):
 filenames = ['filename1.csv', 'filename2.csv', 'filename3.csv', 'filename4.csv']
 
 # Load the phases data from the Excel file
-df_phases = pd.read_excel('/mnt/data/phases.xlsx')
+df_phases = pd.read_excel('/phases.xlsx')
+
+# Load the Region Lookup Data
+df_region_lookup = pd.read_excel('/region lookup.xlsx')
+
+
 
 # Convert the 'Date' column from string to datetime
 df_phases['Date'] = pd.to_datetime(df_phases['Date'])
