@@ -1,6 +1,39 @@
 # Required Libraries
 import pandas as pd
-from datetime import datetime, timedelta
+# from datetime import datetime, timedelta Commented out for testing
+import os
+
+
+def by_district_observations(df):
+    # Group by 'Territory' and count 'Company'
+    district_obs = df.groupby('Territory')['Company'].count().reset_index()
+
+    # Rename the column
+    district_obs.rename(columns={'Company': '# of Scheduled Stops Today'}, inplace=True)
+
+    # Create '# of 6 Day Non Buys' column
+    non_buys = df[(df['Sale Complete On Expected Day?'] == '6 Day Non Buy') & df['Survey Results'].notna()]
+    non_buys_count = non_buys.groupby('Territory')['Company'].count().reset_index()
+    non_buys_count.rename(columns={'Company': '# of 6 Day Non Buys'}, inplace=True)
+
+    # Merge the dataframes
+    district_obs = pd.merge(district_obs, non_buys_count, on='Territory', how='left')
+
+    # Create 'Non Buy % of Total Scheduled Stops' column
+    district_obs['Non Buy % of Total Scheduled Stops'] = district_obs['# of 6 Day Non Buys'] / district_obs['# of Scheduled Stops Today'] * 100
+
+    # Create '# of Missed Stops' column
+    missed_stops = df[(df['Sale Complete On Expected Day?'] == '6 Day Non Buy') & (df['Survey Results'] == 'Missed Stop')]
+    missed_stops_count = missed_stops.groupby('Territory')['Company'].count().reset_index()
+    missed_stops_count.rename(columns={'Company': '# of Missed Stops'}, inplace=True)
+
+    # Merge the dataframes
+    district_obs = pd.merge(district_obs, missed_stops_count, on='Territory', how='left')
+
+    # Create 'Missed Stops % of 6 Day Non Buys' column
+    district_obs['Missed Stops % of 6 Day Non Buys'] = district_obs['# of Missed Stops'] / district_obs['# of 6 Day Non Buys'] * 100
+
+    return district_obs
 
 
 def main():
@@ -19,7 +52,9 @@ def main():
     survey_report = pd.read_csv(path_survey_report)
 
     # Date for Yesterday
-    yesterday = datetime.now() - timedelta(days=1)
+    #yesterday = datetime.now() - timedelta(days=1)
+    # Hardcoded date for testing
+    yesterday = pd.to_datetime('2023-07-24')
     yesterday = pd.to_datetime(yesterday.strftime('%Y-%m-%d'))  # Convert yesterday to a datetime object
 
     # Phase and Day for Yesterday
@@ -83,8 +118,21 @@ def main():
     merged_report.rename(columns={'Please select a reason why no sale took place:': 'Survey Results'}, inplace=True)
     merged_report.drop(columns=['Date'], inplace=True)
 
-    # Save the final dataframe to a CSV file
-    merged_report.to_csv('Stops_Worksheet.csv', index=False)
+    # Generate 'By District Observations' data
+    district_obs = by_district_observations(merged_report)
+
+    # Generate a unique filename
+    filename = 'Stops_Worksheet.xlsx'
+    counter = 1
+    while os.path.isfile(filename):
+        # If file already exists, add counter to filename
+        filename = f'Stops_Worksheet_{counter}.xlsx'
+        counter += 1
+
+    # Save the final dataframe and 'By District Observations' data to an Excel file
+    with pd.ExcelWriter(filename) as writer:
+        merged_report.to_excel(writer, sheet_name='Stops', index=False)
+        district_obs.to_excel(writer, sheet_name='By District Observations')
 
 if __name__ == "__main__":
     main()
