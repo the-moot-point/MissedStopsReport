@@ -1,46 +1,22 @@
 # Required Libraries
 import pandas as pd
-# from datetime import datetime, timedelta Commented out for testing
-import os
+from datetime import datetime, timedelta
 
 
-def by_district_observations(df):
-    # Group by 'Territory' and count 'Company'
-    district_obs = df.groupby('Territory')['Company'].count().reset_index()
-
-    # Rename the column
-    district_obs.rename(columns={'Company': '# of Scheduled Stops Today'}, inplace=True)
-
-    # Create '# of 6 Day Non Buys' column
-    non_buys = df[(df['Sale Complete On Expected Day?'] == '6 Day Non Buy') & df['Survey Results'].notna()]
-    non_buys_count = non_buys.groupby('Territory')['Company'].count().reset_index()
-    non_buys_count.rename(columns={'Company': '# of 6 Day Non Buys'}, inplace=True)
-
-    # Merge the dataframes
-    district_obs = pd.merge(district_obs, non_buys_count, on='Territory', how='left')
-
-    # Create 'Non Buy % of Total Scheduled Stops' column
-    district_obs['Non Buy % of Total Scheduled Stops'] = district_obs['# of 6 Day Non Buys'] / district_obs['# of Scheduled Stops Today'] * 100
-
-    # Create '# of Missed Stops' column
-    missed_stops = df[(df['Sale Complete On Expected Day?'] == '6 Day Non Buy') & (df['Survey Results'] == 'Missed Stop')]
-    missed_stops_count = missed_stops.groupby('Territory')['Company'].count().reset_index()
-    missed_stops_count.rename(columns={'Company': '# of Missed Stops'}, inplace=True)
-
-    # Merge the dataframes
-    district_obs = pd.merge(district_obs, missed_stops_count, on='Territory', how='left')
-
-    # Create 'Missed Stops % of 6 Day Non Buys' column
-    district_obs['Missed Stops % of 6 Day Non Buys'] = district_obs['# of Missed Stops'] / district_obs['# of 6 Day Non Buys'] * 100
-
-    return district_obs
+def update_survey_results(row):
+    if row['Sale Complete On Expected Day?'] in ['Completed', 'Service Completed In Last 6 Days']:
+        return 'Completed'
+    elif row['Last Sale Date'] == 'No Sale Last 6 Days' and row['Sale Complete On Expected Day?'] == '6 Day Non Buy':
+        return 'Missed Stop'
+    else:
+        return row['Survey Results']
 
 
 def main():
     # File paths
     path_stops_report = "Stops_Report.csv"
-    path_phases = "phases.xlsx"
-    path_region_lookup = "region lookup.xlsx"
+    path_phases = "/config/phases.xlsx"
+    path_region_lookup = "/config/region lookup.xlsx"
     path_invoices_report = "Invoices_Report.csv"
     path_survey_report = "No_Sale_Survey.csv"
 
@@ -52,9 +28,7 @@ def main():
     survey_report = pd.read_csv(path_survey_report)
 
     # Date for Yesterday
-    #yesterday = datetime.now() - timedelta(days=1)
-    # Hardcoded date for testing
-    yesterday = pd.to_datetime('2023-07-24')
+    yesterday = datetime.now() - timedelta(days=1)
     yesterday = pd.to_datetime(yesterday.strftime('%Y-%m-%d'))  # Convert yesterday to a datetime object
 
     # Phase and Day for Yesterday
@@ -65,7 +39,8 @@ def main():
     phase_yesterday_num = phase_mapping[phase_info_yesterday['Phase'].values[0]]
 
     # Filter Stops Report
-    filtered_report = stops_report[(stops_report['Phase'] == phase_yesterday_num) & (stops_report['Day Of Week'] == day_yesterday_num)]
+    filtered_report = stops_report[(stops_report['Phase'] == phase_yesterday_num) &
+                                   (stops_report['Day Of Week'] == day_yesterday_num)]
 
     # Add Region column
     merged_report = pd.merge(filtered_report, region_lookup, on='Territory', how='left')
@@ -83,30 +58,32 @@ def main():
     merged_report.rename(columns={'Date': 'Invoice on Expected Day'}, inplace=True)
 
     # Add Sale Made on Expected Day? column
-    merged_report['Sale Made on Expected Day?'] = merged_report['Invoice on Expected Day'].apply(lambda x: 'No' if pd.isnull(x) else 'Yes')
+    merged_report['Sale Made on Expected Day?'] = merged_report['Invoice on Expected Day'].apply(
+        lambda x: 'No' if pd.isnull(x) else 'Yes')
 
     # Add Net Sales for Expected Day column
-    net_sales = invoices_report[invoices_report['Date'] == yesterday].groupby('Customer ID')['Total Cases'].sum().reset_index()
+    net_sales = invoices_report[invoices_report['Date'] == yesterday].groupby(
+        'Customer ID')['Total Cases'].sum().reset_index()
     net_sales.rename(columns={'Total Cases': 'Net Sales for Expected Day'}, inplace=True)
     merged_report = pd.merge(merged_report, net_sales, on='Customer ID', how='left')
 
     # Add Positive Sale column
-    merged_report['Positive Sale'] = merged_report['Net Sales for Expected Day'].apply(lambda x: 1 if x > 0 else (0 if x <= 0 else float('nan')))
+    merged_report['Positive Sale'] = merged_report['Net Sales for Expected Day'].apply(lambda x: 1 if x != 0 else 0)
 
     # Add Last Sale Date column
-    last_sale_date = invoices_report[invoices_report['Total Cases'] > 0].groupby('Customer ID')['Date'].max().reset_index()
+    last_sale_date = invoices_report[invoices_report['Total Cases'] != 0].groupby('Customer ID')['Date'].max().reset_index()
     last_sale_date.rename(columns={'Date': 'Last Sale Date'}, inplace=True)
     merged_report = pd.merge(merged_report, last_sale_date, on='Customer ID', how='left')
     merged_report['Last Sale Date'] = merged_report.apply(lambda row: 'No Sale Last 6 Days' if pd.isnull(row['Invoice on Expected Day']) else row['Last Sale Date'], axis=1)
 
     # Add Last Sale Date Amount column
-    last_sale_date_amount = invoices_report[invoices_report['Total Cases'] > 0].sort_values('Date').groupby('Customer ID').tail(1)[['Customer ID', 'Total Cases']]
+    last_sale_date_amount = invoices_report[invoices_report['Total Cases'] != 0].sort_values('Date').groupby('Customer ID').tail(1)[['Customer ID', 'Total Cases']]
     last_sale_date_amount.rename(columns={'Total Cases': 'Last Sale Date Amount'}, inplace=True)
     merged_report = pd.merge(merged_report, last_sale_date_amount, on='Customer ID', how='left')
 
     # Add Sale Complete On Expected Day? column
-    merged_report['Sale Complete On Expected Day?'] = merged_report.apply(lambda row: 'Completed' if row['Sale Made on Expected Day?'] == 'Yes' and row['Last Sale Date Amount'] > 0
-                                                                      else ('Service Completed In Last 6 Days' if row['Sale Made on Expected Day?'] == 'No' and row['Last Sale Date Amount'] > 0
+    merged_report['Sale Complete On Expected Day?'] = merged_report.apply(lambda row: 'Completed' if row['Sale Made on Expected Day?'] == 'Yes' and row['Last Sale Date Amount'] != 0
+                                                                      else ('Service Completed In Last 6 Days' if row['Sale Made on Expected Day?'] == 'No' and row['Last Sale Date Amount'] != 0
                                                                       else '6 Day Non Buy'), axis=1)
 
     # Add Survey Results column
@@ -118,21 +95,12 @@ def main():
     merged_report.rename(columns={'Please select a reason why no sale took place:': 'Survey Results'}, inplace=True)
     merged_report.drop(columns=['Date'], inplace=True)
 
-    # Generate 'By District Observations' data
-    district_obs = by_district_observations(merged_report)
+    # Update Survey Results column based on the additional conditions
+    merged_report['Survey Results'] = merged_report.apply(update_survey_results, axis=1)
 
-    # Generate a unique filename
-    filename = 'Stops_Worksheet.xlsx'
-    counter = 1
-    while os.path.isfile(filename):
-        # If file already exists, add counter to filename
-        filename = f'Stops_Worksheet_{counter}.xlsx'
-        counter += 1
+    # Save the final dataframe to a CSV file
+    merged_report.to_csv('Stops_Worksheet.csv', index=False)
 
-    # Save the final dataframe and 'By District Observations' data to an Excel file
-    with pd.ExcelWriter(filename) as writer:
-        merged_report.to_excel(writer, sheet_name='Stops', index=False)
-        district_obs.to_excel(writer, sheet_name='By District Observations')
 
 if __name__ == "__main__":
     main()
