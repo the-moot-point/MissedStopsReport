@@ -9,19 +9,19 @@ def update_survey_results(row):
         return row['Survey Results']
     elif row['Last Sale Date'] == 'No Sale Last 6 Days' and row['Sale Complete On Expected Day?'] == '6 Day Non Buy':
         return 'Missed Stop'
-    elif row['Sale Complete On Expected Day?'] in ['Completed', 'Service Completed In Last 6 Days']:
-        return 'Completed'
+    elif row['Sale Complete On Expected Day?'] in ['Service Completed In Last 6 Days']:
+        return 'Service Completed In Last 6 Days'
     else:
-        return row['Survey Results']
+        return 'Completed'
 
 
 def main():
     # File paths
     path_stops_report = "Stops_Report.csv"
-    path_phases = "config/phases.xlsx"
-    path_region_lookup = "config/region lookup.xlsx"
     path_invoices_report = "Invoices_Report.csv"
     path_survey_report = "No_Sale_Survey.csv"
+    path_region_lookup = "config/region lookup.xlsx"
+    path_phases = "config/phases.xlsx"
     file_path = 'Stops_Worksheet.csv'
 
     # Load Data and survey columns
@@ -32,30 +32,42 @@ def main():
     invoices_report['Date'] = pd.to_datetime(invoices_report['Date'])
     current_date = pd.to_datetime(datetime.now().date())
     invoices_report = invoices_report[invoices_report['Date'] != current_date]
+    six_days_ago = datetime.now() - timedelta(days=6)
+    invoices_report = invoices_report[invoices_report['Date'] >= six_days_ago]
     survey_report = pd.read_csv(path_survey_report)
     survey_report.rename(columns={'Date Completed': 'Date'}, inplace=True)
     survey_report.rename(columns={'Customer Num': 'Customer ID'}, inplace=True)
+    survey_report['Date'] = pd.to_datetime(survey_report['Date'])
+    survey_report = survey_report[survey_report['Date'] >= six_days_ago]
 
-    # Date for Yesterday
-    yesterday = datetime.now() - timedelta(days=1)
-    yesterday = pd.to_datetime(yesterday.strftime('%Y-%m-%d'))  # Convert yesterday to a datetime object
 
-    # Phase and Day for Yesterday
-    phase_info_yesterday = phases[phases['Date'] == pd.Timestamp(yesterday)]
+    # Date for Last Workday
+    current_day_of_week = datetime.now().weekday()
+    if current_day_of_week == 0:  # If today is Monday
+        last_workday = datetime.now() - timedelta(days=3)  # Last Friday
+    elif current_day_of_week == 6:  # If today is Sunday
+        last_workday = datetime.now() - timedelta(days=2)  # Last Friday
+    else:
+        last_workday = datetime.now() - timedelta(days=1)  # Previous day
+
+    last_workday = pd.to_datetime(last_workday.strftime('%Y-%m-%d'))  # Convert to a datetime object
+
+    # Phase and Day for last_workday
+    phase_info_last_workday = phases[phases['Date'] == pd.Timestamp(last_workday)]
     day_mapping = {'Sunday': 1, 'Monday': 2, 'Tuesday': 3, 'Wednesday': 4, 'Thursday': 5, 'Friday': 6, 'Saturday': 7}
     phase_mapping = {'One': 1, 'Two': 2, 'Three': 3, 'Four': 4}
-    day_yesterday_num = day_mapping[phase_info_yesterday['Day Of Week'].values[0]]
-    phase_yesterday_num = phase_mapping[phase_info_yesterday['Phase'].values[0]]
+    day_last_workday_num = day_mapping[phase_info_last_workday['Day Of Week'].values[0]]
+    phase_last_workday_num = phase_mapping[phase_info_last_workday['Phase'].values[0]]
 
     # Filter Stops Report
-    filtered_report = stops_report[(stops_report['Phase'] == phase_yesterday_num) &
-                                   (stops_report['Day Of Week'] == day_yesterday_num)]
+    filtered_report = stops_report[(stops_report['Phase'] == phase_last_workday_num) &
+                                   (stops_report['Day Of Week'] == day_last_workday_num)]
 
     # Add Region column
     merged_report = pd.merge(filtered_report, region_lookup, on='Territory', how='left')
 
     # Add Expected Day of Sale column
-    merged_report['Expected Day of Sale'] = yesterday
+    merged_report['Expected Day of Sale'] = last_workday
 
     # Add Invoice on Expected Day column
     invoices_report['Date'] = pd.to_datetime(invoices_report['Date'])
@@ -71,7 +83,7 @@ def main():
         lambda x: 'No' if pd.isnull(x) else 'Yes')
 
     # Add Net Sales for Expected Day column
-    net_sales = invoices_report[invoices_report['Date'] == yesterday].groupby(
+    net_sales = invoices_report[invoices_report['Date'] == last_workday].groupby(
         'Customer ID')['Total Cases'].sum().round(2).reset_index()
     net_sales.rename(columns={'Total Cases': 'Net Sales for Expected Day'}, inplace=True)
     merged_report = pd.merge(merged_report, net_sales, on='Customer ID', how='left')
